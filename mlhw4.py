@@ -9,6 +9,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from torch.utils.data import DataLoader, TensorDataset
 
+torch.set_num_threads(1)
 #Task 1
 df = pd.read_csv('movie_data.csv')
 print(df.head())
@@ -34,7 +35,8 @@ X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_
 
 tfidf = TfidfVectorizer(strip_accents=None,
                         lowercase=False,
-                        preprocessor=None)
+                        preprocessor=None,
+                        max_features=20000)
 
 X_train_tfidf = tfidf.fit_transform(X_train)
 X_test_tfidf = tfidf.transform(X_test)
