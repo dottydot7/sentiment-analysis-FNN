@@ -14,28 +14,35 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score
 import torch.nn as nn
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
 
 #Task 1
+# Download NLTK stopwords
+nltk.download('stopwords')
+
+# Load dataset
+print("Loading movie dataset...")
 df = pd.read_csv('movie_data.csv')
 print(df.head())
-print(df.shape)
+print(f"Dataset shape: {df.shape}")
 
-nltk.download('stopwords')
+# Preprocessing steps
 stop = stopwords.words('english')
+porter = PorterStemmer()
 
 def preprocessor(text):
     text = re.sub('<[^>]*>', '', text)
-    emoticons = re.findall('(?::|;|=)(?:-)?(?:\)|\(|D|P)', text)
-    text = re.sub('[\W]+', ' ', text.lower())
+    emoticons = re.findall(r'(?::|;|=)(?:-)?(?:\)|\(|D|P)', text)
+    text = re.sub(r'[\W]+', ' ', text.lower())
     text += ' ' + ' '.join(emoticons).replace('-', '')
     return text
 
-porter = PorterStemmer()
+# Apply preprocessing
 df['review'] = df['review'].apply(preprocessor)
 
 X = df['review'].values
-le = LabelEncoder()
-y = le.fit_transform(df['sentiment'])  # y = 0 or 1
+y = df['sentiment'].values
 
 # Add tokenizer + stemming
 def tokenizer_porter(text):
@@ -44,14 +51,13 @@ def tokenizer_porter(text):
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=0)
 
 tfidf = TfidfVectorizer(strip_accents=None,
-                        lowercase=True,
-                        tokenizer=tokenizer_porter,
+                        lowercase=False,
+                        tokenizer=None,
                         max_features=20000)
 
 X_train_tfidf = tfidf.fit_transform(X_train)
 X_test_tfidf = tfidf.transform(X_test)
-print(f"Train shape: {X_train_tfidf.shape}")
-print(f"Test shape: {X_test_tfidf.shape}")
+print(f"TF-IDF Shapes => Train: {X_train_tfidf.shape}| Test: {X_test_tfidf.shape}")
 
 #task 2
 
@@ -68,7 +74,7 @@ torch.manual_seed(1) #for reproducibility
 # torch.set_num_threads(1)
 
 ##############################################
-# 1. TEXTBOOK LOGISTIC REGRESSION
+# TEXTBOOK LOGISTIC REGRESSION
 ##############################################
 print("Training textbook logistic regression...")
 start_time = time.time()
@@ -89,72 +95,267 @@ print(f"\n[Textbook] Logistic Regression Results:")
 print(f"Accuracy: {lr_acc:.4f} (Expected: ~0.90)")
 print(f"Training time: {lr_time:.2f}s")
 
-##############################################
-# 2. ENHANCED FNN WITH HYPERPARAMETER TUNING
-##############################################
+################################################
+# Task 2 - Simple FNN
+################################################
+
+class SimpleFNN(nn.Module):
+    def __init__(self, input_size):
+        super().__init__()
+        self.fc = nn.Linear(input_size, 2)
+
+    def forward(self, x):
+        return self.fc(x)
+
+
+# Train linear PyTorch model
+print("\nTraining Linear Model (PyTorch)...")
+model = SimpleFNN(X_train_tensor.shape[1])
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+loss_fn = nn.CrossEntropyLoss()
+
+pt_accuracies = []
+start_pt = time.time()
+for epoch in range(10):
+    model.train()
+    for xb, yb in train_loader:
+        optimizer.zero_grad()
+        pred = model(xb)
+        loss = loss_fn(pred, yb)
+        loss.backward()
+        optimizer.step()
+
+    model.eval()
+    with torch.no_grad():
+        logits = model(X_test_tensor)
+        preds = torch.argmax(logits, dim=1)
+        acc = accuracy_score(y_test, preds)
+        pt_accuracies.append(acc)
+        print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}, Val Accuracy: {acc:.4f}")
+
+pt_total_time = time.time() - start_pt
+print(f"\nFinal PyTorch Accuracy: {pt_accuracies[-1]:.4f}, Time: {pt_total_time:.2f}s")
+
+#################################################################################
+# Enhanced FNN
+#################################################################################
+
 class FNN(nn.Module):
     def __init__(self, input_size, hidden_units=128):
         super().__init__()
         self.fc1 = nn.Linear(input_size, hidden_units)
-        self.fc2 = nn.Linear(hidden_units, 64)
-        self.fc3 = nn.Linear(64, 2)
-        # self.dropout = nn.Dropout(0.5) 
+        self.fc2 = nn.Linear(hidden_units, 2)
+        # self.dropout = nn.Dropout(0.5)
         
     def forward(self, x):
-        x = F.relu(self.fc1(x))       
+        x = F.relu(self.fc1(x))
         # x = self.dropout(x)
-        x = F.relu(self.fc2(x))
-        # x = self.dropout(x)
-        return self.fc3(x)
+        return self.fc2(x)
 
+
+# Hyperparameter tuning for FNN model
+print("\nTuning FNN Model...")
 param_grid = {
-    'lr': [0.001, 0.0005],           # Learning rates 
-    'hidden_units': [128, 256],       # Hidden layer units 
-    'weight_decay': [0.01, 0.001]     # L2 regularization 
+    'lr': [0.01, 0.001, 0.0001],
+    'weight_decay': [0.0, 0.001, 0.0001]
 }
 
 best_acc = 0
 best_model = None
-best_params = None
-print("\nTraining FNN with hyperparameter tuning...")
+best_params = {}
+accuracies_by_epoch = []
+start_tune = time.time()
 
-for lr in param_grid['lr']:
-    for units in param_grid['hidden_units']:
-        for wd in param_grid['weight_decay']:
+for lr_val in param_grid['lr']:
+    for wd in param_grid['weight_decay']:
+        model = FNN(X_train_tensor.shape[1])
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr_val, weight_decay=wd)
+        loss_fn = nn.CrossEntropyLoss()
+        epoch_acc = []
 
-            model = FNN(X_train_tensor.shape[1], hidden_units=units)
-            optimizer = torch.optim.Adam(model.parameters(), 
-                                       lr=lr, 
-                                       weight_decay=wd)
-            loss_fn = nn.CrossEntropyLoss()
-            
-            start_time = time.time()
-            for epoch in range(10):  
-                model.train()
-                for xb, yb in train_loader:
-                    optimizer.zero_grad()
-                    pred = model(xb)
-                    loss = loss_fn(pred, yb)
-                    loss.backward()
-                    optimizer.step()
-            end_time = time.time()
-                
+        for epoch in range(30):
+            model.train()
+            for xb, yb in train_loader:
+                optimizer.zero_grad()
+                pred = model(xb)
+                loss = loss_fn(pred, yb)
+                loss.backward()
+                optimizer.step()
+
             model.eval()
             with torch.no_grad():
-                    val_logits = model(X_test_tensor)
-                    val_acc = (torch.argmax(val_logits, dim=1) == y_test_tensor).float().mean()
-                    
-                    if val_acc > best_acc:
-                        best_acc = val_acc
-                        best_model = model
-                        best_params = f"lr={lr}, units={units}, wd={wd}"
-                        best_time = end_time - start_time
-            
-            print(f"Config: lr={lr}, units={units}, wd={wd} | Val Acc: {val_acc:.4f} | Time: {end_time - start_time:.2f}s")
+                logits = model(X_test_tensor)
+                preds = torch.argmax(logits, dim=1)
+                acc = accuracy_score(y_test, preds)
+                epoch_acc.append(acc)
+
+        if epoch_acc[-1] > best_acc:
+            best_acc = epoch_acc[-1]
+            best_model = model
+            best_params = {'lr': lr_val, 'weight_decay': wd}
+            accuracies_by_epoch = epoch_acc
+
+        print(f"lr={lr_val}, weight_decay={wd}, Accuracy: {epoch_acc[-1]:.4f}")
+
+tune_time = time.time() - start_tune
+print(f"\nBest Accuracy: {best_acc:.4f} with params {best_params}, Time: {tune_time:.2f}s")
+
+# Plot accuracy over epochs
+plt.figure(figsize=(10, 5))
+plt.plot(range(1, 31), accuracies_by_epoch, marker='o', label='PyTorch FNN')
+plt.axhline(y=lr_acc, color='r', linestyle='--', label='Logistic Regression (sklearn)')
+plt.xlabel('Epoch')
+plt.ylabel('Test Accuracy')
+plt.title('Accuracy over Epochs (Best FNN Config)')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+#############################################################################
+# Task 3
+#############################################################################
+
+# Convert data to numpy for KFold splitting
+X_np = X_train_tfidf.toarray()  
+y_np = y_train
+
+# Initialize KFold
+k = 10  
+kf = KFold(n_splits=k, shuffle=True, random_state=0)
+print(f"\nTraining FNN using {k}-Fold Cross Validation...[Without Dropout]")
+
+# Store results
+fold_accuracies = []
+fold_times = []
+
+for fold, (train_idx, val_idx) in enumerate(kf.split(X_np)):
+    print(f"\nFold {fold + 1}/{k}")
+    
+    # Split data
+    X_train_fold, X_val_fold = X_np[train_idx], X_np[val_idx]
+    y_train_fold, y_val_fold = y_np[train_idx], y_np[val_idx]
+    
+    # Convert to PyTorch tensors
+    X_train_tensor = torch.tensor(X_train_fold, dtype=torch.float32)
+    X_val_tensor = torch.tensor(X_val_fold, dtype=torch.float32)
+    y_train_tensor = torch.tensor(y_train_fold, dtype=torch.long)
+    y_val_tensor = torch.tensor(y_val_fold, dtype=torch.long)
+    
+    # DataLoader
+    train_ds = TensorDataset(X_train_tensor, y_train_tensor)
+    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
+    
+    # Model and optimizer
+    model = FNN(X_train_tensor.shape[1])
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0.00001)
+    
+    # Training
+    start_time = time.time()
+    for epoch in range(10):  # 10 epochs per fold
+        model.train()
+        for xb, yb in train_loader:
+            optimizer.zero_grad()
+            pred = model(xb)
+            loss = F.cross_entropy(pred, yb)
+            loss.backward()
+            optimizer.step()
+    
+    # Validation
+    model.eval()
+    with torch.no_grad():
+        val_logits = model(X_val_tensor)
+        val_acc = (torch.argmax(val_logits, dim=1) == y_val_tensor).float().mean()
+    
+    fold_accuracies.append(val_acc.item())
+    fold_time = time.time() - start_time
+    fold_times.append(fold_time)
+    print(f"Fold Acc: {val_acc:.4f}, Time: {fold_time:.2f}s")
+
+# Results
+print(f"\nMean CV Accuracy: {np.mean(fold_accuracies):.4f}" | f"Mean Time per Fold: {np.mean(fold_times):.2f}s" )
+
 
 ##############################################
-# RESULTS COMPARISON
+# 5.1 SINGLE DROPOUT MODEL
 ##############################################
-print(f"1. Textbook Logistic Regression: {lr_acc:.4f} ({lr_time:.2f}s)")
-print(f"2. [Without Dropout] Best FNN: {best_acc:.4f} (Params: {best_params}, Time: {best_time:.2f}s)")
+# Define a feedforward neural network with dropout regularization
+class DropoutFNN(nn.Module):
+    def __init__(self, input_size, hidden_units=128, p=0.2):
+        super().__init__()
+        # First fully connected layer
+        self.fc1 = nn.Linear(input_size, hidden_units)
+        # Dropout after first layer
+        self.dropout1 = nn.Dropout(p)
+        # Second fully connected layer
+        self.fc2 = nn.Linear(hidden_units, 64)
+        # Dropout after second layer
+        self.dropout2 = nn.Dropout(p)
+        # Output layer
+        self.fc3 = nn.Linear(64, 2)
+    
+    def forward(self, x):
+        # Forward pass with ReLU and dropout applied between layers
+        x = F.relu(self.fc1(x))
+        x = self.dropout1(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout2(x)
+        return self.fc3(x)  # Output raw scores
 
+# Create dropout model
+drop_model = DropoutFNN(X_train_tensor.shape[1])
+
+optimizer = torch.optim.Adam(drop_model.parameters(), lr=0.0001, weight_decay=0)
+
+# Use cross-entropy loss for classification
+loss_fn = nn.CrossEntropyLoss()
+
+# Train model for 10 epochs
+for epoch in range(20):
+    drop_model.train()
+    for xb, yb in train_loader:
+        optimizer.zero_grad()       # Reset gradients
+        pred = drop_model(xb)       # Forward pass
+        loss = loss_fn(pred, yb)    # Compute loss
+        loss.backward()             # Backwards propagation?
+        optimizer.step()            # Update weights using optimizer
+
+
+# Evaluate
+drop_model.eval()
+with torch.no_grad():
+    val_logits = drop_model(X_test_tensor)
+    val_acc = (torch.argmax(val_logits, dim=1) == y_test_tensor).float().mean()
+
+print(f"Dropout Model Accuracy: {val_acc:.4f}")
+
+##############################################
+# 5.2 DROPOUT grouping
+##############################################
+grouping_size = 5
+dropout_preds = []
+
+for i in range(grouping_size):
+    model = DropoutFNN(X_train_tensor.shape[1])
+    optimizer = torch.optim.Adam(drop_model.parameters(), lr=0.0001, weight_decay=0)
+    loss_fn = nn.CrossEntropyLoss()
+
+    for epoch in range(20):
+        model.train()
+        for xb, yb in train_loader:
+            optimizer.zero_grad()
+            pred = model(xb)
+            loss = loss_fn(pred, yb)
+            loss.backward()
+            optimizer.step()
+
+    model.eval()
+    with torch.no_grad():
+        probs = F.softmax(model(X_test_tensor), dim=1)
+        dropout_preds.append(probs)
+
+avg_probs = torch.stack(dropout_preds).mean(dim=0)
+final_preds = torch.argmax(avg_probs, dim=1)
+ensemble_acc = (final_preds == y_test_tensor).float().mean()
+
+print(f"Dropout Grouping Accuracy: {ensemble_acc:.4f}")
