@@ -337,7 +337,7 @@ dropout_preds = []
 
 for i in range(grouping_size):
     model = DropoutFNN(X_train_tensor.shape[1])
-    optimizer = torch.optim.Adam(drop_model.parameters(), lr=0.0001, weight_decay=0)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=0)
     loss_fn = nn.CrossEntropyLoss()
 
     for epoch in range(20):
