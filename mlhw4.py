@@ -164,10 +164,12 @@ best_acc = 0
 best_model = None
 best_params = {}
 accuracies_by_epoch = []
+best_test_time = 0
 start_tune = time.time()
 
 for lr_val in param_grid['lr']:
     for wd in param_grid['weight_decay']:
+        start_test = time.time()
         model = FNN(X_train_tensor.shape[1])
         optimizer = torch.optim.Adam(model.parameters(), lr=lr_val, weight_decay=wd)
         loss_fn = nn.CrossEntropyLoss()
@@ -188,17 +190,18 @@ for lr_val in param_grid['lr']:
                 preds = torch.argmax(logits, dim=1)
                 acc = accuracy_score(y_test, preds)
                 epoch_acc.append(acc)
-
+        test_time = time.time()-start_test
         if epoch_acc[-1] > best_acc:
             best_acc = epoch_acc[-1]
             best_model = model
             best_params = {'lr': lr_val, 'weight_decay': wd}
             accuracies_by_epoch = epoch_acc
+            best_test_time = test_time
 
-        print(f"lr={lr_val}, weight_decay={wd}, Accuracy: {epoch_acc[-1]:.4f}")
+        print(f"lr={lr_val}, weight_decay={wd}, Accuracy: {epoch_acc[-1]:.4f}, Time: {test_time:.2f}s")
 
 tune_time = time.time() - start_tune
-print(f"\nBest Accuracy: {best_acc:.4f} with params {best_params}, Time: {tune_time:.2f}s")
+print(f"\nBest Accuracy: {best_acc:.4f} with params {best_params}, Time: {test_time:.2f}s, Tune Time: {tune_time:.2f}s")
 
 # Plot accuracy over epochs
 plt.figure(figsize=(10, 5))
